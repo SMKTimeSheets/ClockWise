@@ -806,15 +806,23 @@ let CU=null;
 // ═══════════════════════════════════════════
 // GOOGLE SHEETS SYNC
 // ═══════════════════════════════════════════
-// Fire a GET to Apps Script without triggering a CORS preflight.
-// Google Apps Script does not respond to OPTIONS, so mode:'cors' always fails.
-// mode:'no-cors' sends the request and Apps Script receives + processes it fine —
-// we just can't read the response body (which is fine for writes).
+// Google Apps Script redirects /exec to a different URL.
+// fetch with no-cors follows the redirect but some browsers drop query params.
+// We use a hidden Image request which always follows redirects with params intact,
+// then fall back to fetch for browsers that block image tracking.
 async function gasGet(url, params){
-  try{
-    await fetch(url+'?'+params.toString(),{method:'GET',mode:'no-cors'});
-    return true;
-  }catch{return false;}
+  return new Promise(resolve=>{
+    const fullUrl=url+'?'+params.toString();
+    // Try Image first — most reliable for fire-and-forget GAS calls
+    const img=new Image();
+    img.onload=()=>resolve(true);
+    img.onerror=()=>resolve(true); // GAS returns JSON not an image, so onerror fires — but the request was sent
+    img.src=fullUrl;
+    // Also fire a no-cors fetch as a backup
+    fetch(fullUrl,{method:'GET',mode:'no-cors'}).catch(()=>{});
+    // Resolve after 3s regardless
+    setTimeout(()=>resolve(true),3000);
+  });
 }
 
 // For the ping/test we need an actual response, so we use a plain XHR which
