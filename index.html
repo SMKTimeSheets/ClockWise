@@ -863,6 +863,22 @@ async function syncToSheets(entry){
   return await gasGet(DB.sheetsUrl, params);
 }
 
+async function syncBatch(entries){
+  if(!DB.sheetsUrl)return;
+  showSyncBadge('syncing','Syncing…');
+  let failed=0;
+  for(const e of entries){
+    const ok=await syncToSheets(e);
+    e.synced=ok;
+    if(!ok)failed++;
+  }
+  sv('entries',DB.entries);
+  const badge=document.getElementById('sync-ind');
+  if(failed===0){showSyncBadge('synced','✓ Synced to Sheets');}
+  else{showSyncBadge('failed',`${failed} row${failed>1?'s':''} failed to sync`);}
+  setTimeout(()=>{if(badge)badge.style.display='none';},5000);
+}
+
 async function syncLeaveToSheets(req, status){
   if(!DB.sheetsUrl)return;
   const emp=DB.employees.find(e=>e.id===req.eId)||{first:'?',last:'',email:'',dept:''};
