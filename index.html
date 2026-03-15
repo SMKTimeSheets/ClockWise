@@ -806,21 +806,15 @@ let CU=null;
 // ═══════════════════════════════════════════
 // GOOGLE SHEETS SYNC
 // ═══════════════════════════════════════════
-// Google Apps Script redirects /exec to a different URL.
-// fetch with no-cors follows the redirect but some browsers drop query params.
-// We use a hidden Image request which always follows redirects with params intact,
-// then fall back to fetch for browsers that block image tracking.
+// Google Apps Script redirects /exec requests. We use a hidden Image request
+// which reliably follows redirects with all query params intact.
 async function gasGet(url, params){
   return new Promise(resolve=>{
     const fullUrl=url+'?'+params.toString();
-    // Try Image first — most reliable for fire-and-forget GAS calls
     const img=new Image();
     img.onload=()=>resolve(true);
-    img.onerror=()=>resolve(true); // GAS returns JSON not an image, so onerror fires — but the request was sent
+    img.onerror=()=>resolve(true); // GAS returns JSON not an image, so onerror fires — but the request was sent and processed
     img.src=fullUrl;
-    // Also fire a no-cors fetch as a backup
-    fetch(fullUrl,{method:'GET',mode:'no-cors'}).catch(()=>{});
-    // Resolve after 3s regardless
     setTimeout(()=>resolve(true),3000);
   });
 }
