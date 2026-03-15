@@ -859,6 +859,7 @@ async function syncToSheets(entry){
     week:weekLabel(entry.date),
     submittedAt:entry.submittedAt,
   });
+  console.log('[ClockWise] Syncing entry to sheets:', DB.sheetsUrl+'?'+params.toString());
   return await gasGet(DB.sheetsUrl, params);
 }
 
