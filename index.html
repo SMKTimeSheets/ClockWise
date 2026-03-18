@@ -334,7 +334,8 @@ tbody tr:hover td{background:var(--surface2);}
   <div class="auth-box">
     <div class="auth-logo">Clock<em>Wise</em></div>
     <div class="auth-title">Create Your Account</div>
-    <div class="auth-sub">You need the <strong>Company Code</strong> from your admin to get started.</div>
+    <div class="auth-sub">You need the <strong>Company Code</strong> and <strong>Google Sheets URL</strong> from your admin to get started.</div>
+    <div class="fg"><label>Google Sheets Web App URL</label><input id="reg-sheets-url" placeholder="https://script.google.com/macros/s/…/exec" oninput="this.value=this.value.trim()"/></div>
     <div class="fg"><label>Company Code</label><input id="reg-code" placeholder="e.g. CW-4829" maxlength="7" style="font-family:'JetBrains Mono',monospace;letter-spacing:2px;font-size:16px;" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="row2"><div class="fg"><label>First Name</label><input id="reg-first" placeholder="Jane"/></div><div class="fg"><label>Last Name</label><input id="reg-last" placeholder="Smith"/></div></div>
     <div class="fg"><label>Work Email</label><input type="email" id="reg-email" placeholder="jane@company.com"/></div>
@@ -354,7 +355,8 @@ tbody tr:hover td{background:var(--surface2);}
   <div class="auth-box">
     <div class="auth-logo">Clock<em>Wise</em></div>
     <div class="auth-title" id="login-ttl">Sign In</div>
-    <div class="fg"><label>Work Email</label><input type="email" id="li-email" placeholder="you@company.com"/></div>
+    <div class="fg" id="li-sheets-row" style="display:none;"><label>Google Sheets URL <span style="font-weight:400;color:var(--ink3);">(first time on this device)</span></label><input id="li-sheets-url" placeholder="https://script.google.com/macros/s/…/exec" oninput="this.value=this.value.trim()"/></div>
+    <div class="fg"><label>Work Email</label><input type="email" id="li-email" placeholder="you@company.com" onfocus="checkShowSheetsField()"/></div>
     <div class="fg"><label>Password</label><input type="password" id="li-pass"/></div>
     <button class="btn btn-primary btn-full" style="margin-top:6px;" onclick="doLogin()">Sign In →</button>
     <div class="auth-switch">New here? <button class="link-btn" onclick="show('s-register')">Create Account</button></div>
@@ -801,6 +803,7 @@ let DB={
   observedHolidays: ld('observedHolidays',null),
   customHolidays: ld('customHolidays',[]),
 };
+const GAS_TOKEN='1e4c974986e6d26eab3535856d1557b1464c8fbb195b29c3aa253ff278413c7c';
 let CU=null;
 
 // ═══════════════════════════════════════════
@@ -809,6 +812,7 @@ let CU=null;
 // Google Apps Script redirects /exec requests. We use a hidden Image request
 // which reliably follows redirects with all query params intact.
 async function gasGet(url, params){
+  params.set('token', GAS_TOKEN);
   return new Promise(resolve=>{
     const fullUrl=url+'?'+params.toString();
     const img=new Image();
@@ -816,6 +820,23 @@ async function gasGet(url, params){
     img.onerror=()=>resolve(true); // GAS returns JSON not an image, so onerror fires — but the request was sent and processed
     img.src=fullUrl;
     setTimeout(()=>resolve(true),3000);
+  });
+}
+
+// gasRead — used when we need to READ data back from Apps Script (uses XHR, not Image)
+function gasRead(url, params){
+  params.set('token', GAS_TOKEN);
+  return new Promise(resolve=>{
+    const xhr=new XMLHttpRequest();
+    xhr.open('GET',url+'?'+params.toString(),true);
+    xhr.onload=()=>{
+      try{resolve(JSON.parse(xhr.responseText));}
+      catch{resolve(null);}
+    };
+    xhr.onerror=()=>resolve(null);
+    xhr.timeout=8000;
+    xhr.ontimeout=()=>resolve(null);
+    xhr.send();
   });
 }
 
@@ -1064,13 +1085,76 @@ async function hp(p){const b=await crypto.subtle.digest('SHA-256',new TextEncode
 function genCode(){return 'CW-'+Math.floor(1000+Math.random()*9000);}
 function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id)?.classList.add('active');}
 
-window.addEventListener('DOMContentLoaded',()=>{
-  if(!DB.company){document.getElementById('l-new').style.display='block';document.getElementById('l-existing').style.display='none';}
-  else{document.getElementById('l-new').style.display='none';document.getElementById('l-existing').style.display='block';document.getElementById('l-co-name').textContent='Welcome back to '+DB.company.name;document.getElementById('login-ttl').textContent='Sign in to '+DB.company.name;}
-  show('s-landing');
+window.addEventListener('DOMContentLoaded',async()=>{
   document.querySelectorAll('.day-pill').forEach(b=>b.addEventListener('click',()=>b.classList.toggle('on')));
   showTpl('daily',null);
+  // If we have a sheetsUrl, always refresh company + employees from sheet
+  if(DB.sheetsUrl){
+    showLoadingScreen('Loading workspace…');
+    await loadFromSheet();
+    hideLoadingScreen();
+  }
+  updateLandingScreen();
+  show('s-landing');
 });
+
+function showLoadingScreen(msg){
+  let el=document.getElementById('loading-screen');
+  if(!el){
+    el=document.createElement('div');
+    el.id='loading-screen';
+    el.style.cssText='position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;gap:16px;';
+    el.innerHTML=`<div style="font-family:'Syne',sans-serif;font-weight:800;font-size:24px;color:var(--navy);">Clock<em style="color:var(--gold);font-style:normal;">Wise</em></div><div style="font-size:13px;color:var(--ink3);" id="loading-msg">${msg}</div><div style="width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--navy);border-radius:50%;animation:spin .8s linear infinite;"></div>`;
+    document.body.appendChild(el);
+    if(!document.getElementById('spin-style')){
+      const s=document.createElement('style');s.id='spin-style';
+      s.textContent='@keyframes spin{to{transform:rotate(360deg)}}';
+      document.head.appendChild(s);
+    }
+  }
+  el.style.display='flex';
+  document.getElementById('loading-msg').textContent=msg;
+}
+
+function hideLoadingScreen(){
+  const el=document.getElementById('loading-screen');
+  if(el)el.style.display='none';
+}
+
+async function loadFromSheet(){
+  if(!DB.sheetsUrl)return;
+  try{
+    // Load company
+    const cr=await gasRead(DB.sheetsUrl,new URLSearchParams({action:'getCompany'}));
+    if(cr&&cr.status==='ok'&&cr.company){
+      DB.company=cr.company;
+      sv('company',DB.company);
+    }
+    // Load employees
+    const er=await gasRead(DB.sheetsUrl,new URLSearchParams({action:'getEmployees'}));
+    if(er&&er.status==='ok'&&er.employees&&er.employees.length){
+      DB.employees=er.employees;
+      sv('employees',DB.employees);
+      // Sync nextId to avoid collisions
+      const maxId=Math.max(...er.employees.map(e=>e.id||0));
+      if(maxId>=DB.nextId){DB.nextId=maxId+1;sv('nextId',DB.nextId);}
+    }
+  }catch(err){
+    console.warn('[ClockWise] Could not load from sheet:',err);
+  }
+}
+
+function updateLandingScreen(){
+  if(!DB.company){
+    document.getElementById('l-new').style.display='block';
+    document.getElementById('l-existing').style.display='none';
+  }else{
+    document.getElementById('l-new').style.display='none';
+    document.getElementById('l-existing').style.display='block';
+    document.getElementById('l-co-name').textContent='Welcome back to '+DB.company.name;
+    document.getElementById('login-ttl').textContent='Sign in to '+DB.company.name;
+  }
+}
 
 // ═══════════════════════════════════════════
 // SETUP / REGISTER / LOGIN
@@ -1080,40 +1164,84 @@ async function doSetup(){
   if(!co||!first||!last||!email||!pass){toast('Fill in all fields.','err');return;}
   if(pass!==pass2){toast('Passwords do not match.','err');return;}
   if(pass.length<6){toast('Password must be 6+ characters.','err');return;}
+  if(!DB.sheetsUrl){toast('Connect Google Sheets first — go to the Google Sheets screen after setup.','warn');return;}
   const code=genCode();
   DB.company={name:co,code};
   const emp={id:DB.nextId++,first,last,email,dept:'Admin',pref:'either',passHash:await hp(pass),isAdmin:true,projs:[]};
   DB.employees.push(emp);
   sv('company',DB.company);sv('employees',DB.employees);sv('nextId',DB.nextId);
+  // Write to sheet
+  await gasRead(DB.sheetsUrl,new URLSearchParams({action:'saveCompany',name:co,code}));
+  await gasRead(DB.sheetsUrl,new URLSearchParams({action:'saveEmployee',id:emp.id,first,last,email,dept:'Admin',pref:'either',passHash:emp.passHash,isAdmin:'true'}));
   document.getElementById('code-val').textContent=code;
   CU=emp;show('s-code');
 }
 
 async function doRegister(){
+  const sheetsUrl=v('reg-sheets-url').trim();
   const code=v('reg-code').toUpperCase(),first=v('reg-first'),last=v('reg-last'),email=v('reg-email').toLowerCase(),dept=v('reg-dept'),pref=document.getElementById('reg-pref').value,pass=v('reg-pass');
   if(!code||!first||!last||!email||!pass){toast('Fill in all fields.','err');return;}
-  if(!DB.company){toast('No workspace set up yet.','err');return;}
+  if(pass.length<6){toast('Password must be 6+ characters.','err');return;}
+  // Save sheets URL if provided
+  if(sheetsUrl&&sheetsUrl.includes('script.google.com')){
+    DB.sheetsUrl=sheetsUrl;sv('sheetsUrl',sheetsUrl);
+  }
+  // If no local company, try loading from sheet using the code
+  if(!DB.company&&DB.sheetsUrl){
+    showLoadingScreen('Checking company code…');
+    await loadFromSheet();
+    hideLoadingScreen();
+    updateLandingScreen();
+  }
+  if(!DB.company){toast('Workspace not found. Make sure the Google Sheets URL is correct.','err');return;}
   if(code!==DB.company.code){toast('Wrong Company Code. Check with your admin.','err');return;}
   if(DB.employees.find(e=>e.email===email)){toast('That email already has an account.','err');return;}
-  if(pass.length<6){toast('Password must be 6+ characters.','err');return;}
   if(DB.employees.filter(e=>!e.isAdmin).length>=30){toast('Team limit of 30 reached.','err');return;}
-  const emp={id:DB.nextId++,first,last,email,dept,pref,passHash:await hp(pass),isAdmin:false,projs:[]};
+  const passHash=await hp(pass);
+  const emp={id:DB.nextId++,first,last,email,dept,pref,passHash,isAdmin:false,projs:[]};
   DB.employees.push(emp);sv('employees',DB.employees);sv('nextId',DB.nextId);
+  // Write to sheet
+  if(DB.sheetsUrl){
+    await gasRead(DB.sheetsUrl,new URLSearchParams({action:'saveEmployee',id:emp.id,first,last,email,dept,pref,passHash,isAdmin:'false'}));
+  }
   CU=emp;enterApp();toast('Welcome, '+first+'! 👋','ok');
 }
 
 async function doLogin(){
   const email=v('li-email').toLowerCase(),pass=v('li-pass');
   if(!email||!pass){toast('Enter email and password.','err');return;}
+  // Pick up sheets URL from form if on a new device
+  const formUrl=(v('li-sheets-url')||'').trim();
+  if(formUrl&&formUrl.includes('script.google.com')){
+    DB.sheetsUrl=formUrl;sv('sheetsUrl',formUrl);
+  }
+  // Refresh employees from sheet before login so we always have latest
+  if(DB.sheetsUrl){
+    showLoadingScreen('Signing in…');
+    await loadFromSheet();
+    hideLoadingScreen();
+  }
   const hash=await hp(pass);
   const emp=DB.employees.find(e=>e.email===email&&e.passHash===hash);
   if(!emp){toast('Email or password is incorrect.','err');return;}
   CU=emp;enterApp();
 }
 
+function checkShowSheetsField(){
+  // Show the Sheets URL field on login if no sheetsUrl is stored yet
+  const row=document.getElementById('li-sheets-row');
+  if(row)row.style.display=DB.sheetsUrl?'none':'block';
+}
+
 async function doAdminLogin(){
   const email=v('al-email').toLowerCase(),pass=v('al-pass');
   if(!email||!pass){toast('Enter email and password.','err');return;}
+  // Refresh from sheet before login
+  if(DB.sheetsUrl){
+    showLoadingScreen('Signing in…');
+    await loadFromSheet();
+    hideLoadingScreen();
+  }
   const hash=await hp(pass);
   const emp=DB.employees.find(e=>e.email===email&&e.passHash===hash&&e.isAdmin);
   if(!emp){toast('Admin account not found or wrong password.','err');return;}
@@ -1503,19 +1631,36 @@ async function saveEmp(){
   const first=v('em-first'),last=v('em-last'),email=v('em-email').toLowerCase(),dept=v('em-dept'),pref=document.getElementById('em-pref').value,pass=v('em-pass');
   if(!first||!last||!email){toast('Name and email required.','err');return;}
   if(editEId){
-    const e=DB.employees.find(e=>e.id===editEId);Object.assign(e,{first,last,email,dept,pref});
+    const e=DB.employees.find(e=>e.id===editEId);
+    Object.assign(e,{first,last,email,dept,pref});
     if(pass.length>=6)e.passHash=await hp(pass);
+    if(DB.sheetsUrl){
+      await gasRead(DB.sheetsUrl,new URLSearchParams({action:'updateEmployee',id:e.id,first,last,email,dept,pref,passHash:e.passHash,isAdmin:String(e.isAdmin)}));
+    }
     toast('Employee updated.','ok');
   }else{
     if(DB.employees.find(e=>e.email===email)){toast('That email already has an account.','err');return;}
     if(!pass||pass.length<6){toast('Set a password (6+ chars).','err');return;}
     if(DB.employees.filter(e=>!e.isAdmin).length>=30){toast('Max 30 employees reached.','err');return;}
-    DB.employees.push({id:DB.nextId++,first,last,email,dept,pref,passHash:await hp(pass),isAdmin:false,projs:[]});
+    const passHash=await hp(pass);
+    const emp={id:DB.nextId++,first,last,email,dept,pref,passHash,isAdmin:false,projs:[]};
+    DB.employees.push(emp);
+    if(DB.sheetsUrl){
+      await gasRead(DB.sheetsUrl,new URLSearchParams({action:'saveEmployee',id:emp.id,first,last,email,dept,pref,passHash,isAdmin:'false'}));
+    }
     toast(first+' '+last+' added!','ok');
   }
   sv('employees',DB.employees);sv('nextId',DB.nextId);closeModal('emp-modal');renderEmpList();populateDeptF('df-dept');populateDeptF('emp-dept-f');
 }
-async function delEmp(id){if(!confirm('Remove this employee? Their local entries will be kept.'))return;DB.employees=DB.employees.filter(e=>e.id!==id);sv('employees',DB.employees);renderEmpList();toast('Employee removed.','ok');}
+
+async function delEmp(id){
+  if(!confirm('Remove this employee? Their time entries will be kept.'))return;
+  if(DB.sheetsUrl){
+    await gasRead(DB.sheetsUrl,new URLSearchParams({action:'deleteEmployee',id}));
+  }
+  DB.employees=DB.employees.filter(e=>e.id!==id);
+  sv('employees',DB.employees);renderEmpList();toast('Employee removed.','ok');
+}
 
 // ═══════════════════════════════════════════
 // REPORTS
